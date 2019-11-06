@@ -6,16 +6,24 @@ unmixeels
 ### Install
 
 1. Install `gcc`, `make` and `R` on your Linux system. 
-   On Debian/Ubuntu, run
-   ```sudo apt-get install build-essential r-base```
+   On Debian/Ubuntu, run 
+   ```
+   sudo apt-get install build-essential r-base
+   ```
 2. Install `R6` library for R. 
    Run R from terminal, then run the following command:
-   ```> install.packages("R6")```
+   ```
+   > install.packages("R6")
+   ```
    You may also want the "plotrix" library: 
-   ```> install.packages("plotrix")```
+   ```
+   > install.packages("plotrix")
+   ```
 2. Download the source package.
 3. Compile `libdmformat` :
-   ```cd libdmformat ; make```
+   ```
+   cd libdmformat ; make
+   ```
 4. Compile subroutine `my_gaussian_1.c` :
 ```
    cd .. 
