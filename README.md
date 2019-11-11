@@ -19,7 +19,12 @@ unmixeels
    ```
    > install.packages("plotrix")
    ```
-2. Download the source package.
+2. Download and unpack the source package. 
+   ```
+   wget https://github.com/sironglu/unmixeels/archive/master.zip
+   unzip master.zip
+   cd unmixeels-master/
+   ```
 3. Compile `libdmformat` :
    ```
    cd libdmformat ; make
