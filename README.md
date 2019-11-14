@@ -1,5 +1,25 @@
 unmixeels
 ===
+
+* An open-source software framework of hyperspectral unmixing for energy-loss near-edge fine structure analysis. 
+
+* This framework gives quantitative results for 
+   1) number of independent spectral components. 
+   2) the signature of each spectral component. 
+   3) the abundance of each spectral component in each pixel. 
+
+* This framework includes an "unsupervised" unmixing process. Reference spectra from other sources are not needed. 
+
+See `simulated_data.R` for more information
+
+![Screenshot](screenshot.png)
+
+|          |               |       |
+|----------|:-------------:|------:|
+| PCA/SVD Signatures |  Data & EMs in Dimension 1&2 | **Abundance map** |
+| PCA/SVD Scores |    Data & EMs in Dimension 1&3   | **Residual map** |
+| Normalized Data | **Spectral Signatures** | **ADF image** |
+
 ### Installation
 
 1. Install `gcc`, `make` and `R` on your Linux system. 
