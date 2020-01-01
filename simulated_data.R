@@ -70,7 +70,7 @@ imgAndSI<-ImgAndSpecAlign$new(spikeCorrectedSI, origADFObj)
 # e_drift_along_y_search_rng_2nd = -5:5 : search range in the following iterations
 
 # e drift alignment for y
-imgAndSI$SI_e_drift_along_y_corr(x0=88, x1=109, y0=1, y1=61, type_xy='px', e0=453, e1=470, type_e'unit-absolute', smth_method='poly')
+imgAndSI$SI_e_drift_along_y_corr(x0=88, x1=109, y0=1, y1=61, type_xy='px', e0=453, e1=470, type_e='unit-absolute', smth_method='poly')
 
 # e drift alignment for x (doing a transpose for xy, align, and transpose back)
 imgAndSI$get_SI()$transpose_xy()
