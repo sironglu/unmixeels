@@ -1,5 +1,5 @@
-dyn.load("libdmformat/libdmformat.so")
-dyn.load("my_gaussian_1.so")
+dyn.load("~/workspace/EELS/codes-nightly/libdmformat/libdmformat.so")
+dyn.load("~/workspace/EELS/codes-nightly/my_gaussian_1.so")
 library(R6)
 #library(abind)
 
@@ -343,7 +343,7 @@ OrigSI<-R6Class ("OrigSI",
       }
       self$convert_to_3d_with_warn()
       self$set_Cnt(ThreeDimData$new(private$.Cnt)$data_binning_3d(nbin, along))
-      if (along == 'e') {
+      if (along == 3) {
         self$set_E(ThreeDimData$new(private$.E)$data_binning_1d(nbin)/nbin)
       }
       calib<-private$.calib
