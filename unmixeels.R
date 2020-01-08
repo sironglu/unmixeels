@@ -1,5 +1,5 @@
-dyn.load("~/workspace/EELS/codes-nightly/libdmformat/libdmformat.so")
-dyn.load("~/workspace/EELS/codes-nightly/my_gaussian_1.so")
+dyn.load("libdmformat/libdmformat.so")
+dyn.load("my_gaussian_1.so")
 library(R6)
 #library(abind)
 
