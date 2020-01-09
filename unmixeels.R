@@ -1832,7 +1832,7 @@ EELSUnmix<-R6Class( "EELS_unmix",
       str_ylab<-sprintf("y/%s",calibForFit$Units[2])
       if (dim(coef)[2] == 1) {
         coef<-coef/max(coef)
-        sum_line<-rowSums(coef[,1,])
+        sum_line<-rowSums(coef[,1,,drop=F])
         line_ylim<-range(c(coef, sum_line))
         if (plot_em_position) {
           line_ylim_new<-c(min(line_ylim)-.1*(max(line_ylim)-min(line_ylim)),max(line_ylim))
