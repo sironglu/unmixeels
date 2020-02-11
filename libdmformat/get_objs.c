@@ -16,9 +16,16 @@ DM_node* DM_get_first_entry_by_name(DM_node* root, char* tag_name){
 		return NULL;
 	}
 	if (cnt != 1) {
-		printf("Warn: More than one %s tag is found. Return first one.\n", tag_name);
+		printf("Warn: More than one (%d) %s tag is found. Return the first one.\n", cnt, tag_name);
 	}
+/* get the last one
 	DM_node* output_node = output_nodes->node;
+*/
+	DM_node* output_node;
+	while (output_nodes->next) 
+		DM_nodelist_pop(&output_nodes);
+//		output_nodes = output_nodes->next;
+	output_node = output_nodes->node;
 	DM_nodelist_delete(output_nodes);
 	return output_node;
 }
@@ -180,7 +187,7 @@ int DM_get_image2(DM_node** root, char** with_name, char** Units, int* dimension
 	DM_node_list* ImageTags_nodes = NULL;
 	int ImageTags_cnt = DM_get_nodes_by_tag_name(ImageList_node, &ImageTags_nodes, "ImageTags", 9);
 	if (ImageTags_cnt < 1) {
-		printf("Error: ImageTags not found.\n");
+		printf("Error: ImageTags not found. \n");
 		return -1;
 	}
 	DM_node* ImageTags_with_EELS = DM_get_first_node_has_successor_with_tag_name(ImageTags_nodes, *with_name);
