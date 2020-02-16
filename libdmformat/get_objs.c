@@ -8,31 +8,44 @@
 #include <iconv.h>
 #include <string.h>
 
-DM_node* DM_get_first_entry_by_name(DM_node* root, char* tag_name){
+int DM_get_nth_entry_by_name(DM_node** output_node, DM_node* root, char* tag_name, int n){
 	DM_node_list* output_nodes = NULL;
 	int cnt = DM_get_nodes_by_tag_name(root, &output_nodes, tag_name, strlen(tag_name));
 	if (cnt == 0) {
 		printf("Error: tag %s not found.\n", tag_name);
-		return NULL;
-	}
-	if (cnt != 1) {
-		printf("Warn: More than one (%d) %s tag is found. Return the first one.\n", cnt, tag_name);
+		return 0;
 	}
 /* get the last one
 	DM_node* output_node = output_nodes->node;
 */
-	DM_node* output_node;
-	while (output_nodes->next) 
+//	DM_node* output_node;
+	int i;
+	for (i=cnt; (output_nodes->next)  && (i>n) ; i-- )
 		DM_nodelist_pop(&output_nodes);
 //		output_nodes = output_nodes->next;
-	output_node = output_nodes->node;
+	if (cnt < n) 
+		printf("Warn: Request %dth of %s. Return the last one (%dth).\n", n, tag_name, cnt);
+	*output_node = output_nodes->node;
 	DM_nodelist_delete(output_nodes);
+	return cnt;
+}
+
+DM_node* DM_get_first_entry_by_name(DM_node* root, char* tag_name){
+	DM_node* output_node = NULL;
+	int cnt = DM_get_nth_entry_by_name(&output_node, root, tag_name, 1);
+	if (cnt != 1) {
+		printf("Warn: More than one (%d) %s tag is found. Return the first one.\n", cnt, tag_name);
+	}
 	return output_node;
 }
 
-
 DM_node* DM_get_first_node_has_successor_with_tag_name(DM_node_list* node_list, char* tag_name) {
-	DM_node_list* tmp_nodes = node_list;
+	DM_node_list* tmp_nodes = NULL;
+	/*reverse the order of node_list*/
+	while (node_list) {
+		DM_nodelist_push(&tmp_nodes, node_list->node);
+		DM_nodelist_pop(&node_list);
+	}
 	DM_node* successor_with_tag_name = NULL;
 	for (;tmp_nodes!=NULL;) {
 		DM_node* test_node	= tmp_nodes->node;
@@ -43,11 +56,17 @@ DM_node* DM_get_first_node_has_successor_with_tag_name(DM_node_list* node_list, 
 		hit_cnt = DM_get_nodes_by_tag_name(test_node, &successor_nodes, tag_name, strlen(tag_name));
 		DM_nodelist_delete(successor_nodes);
 		if ( hit_cnt > 0 ){
+/*
 			if ( ((hit_cnt > 1) && (successor_with_tag_name == NULL)) || (successor_with_tag_name != NULL) ) 
-				printf("Warn: More than one node with %s found. Return first one.\n", tag_name);
+				printf("Warn: More than one (%d) node with %s found. Return the first one.\n", hit_cnt, tag_name);
 			if ( successor_with_tag_name == NULL )
 				successor_with_tag_name = test_node;
 			else break;
+*/
+			if ((hit_cnt > 1) && (successor_with_tag_name == NULL))
+				printf("Warn: More than one (%d) node with %s found. Return the first one.\n", hit_cnt, tag_name);
+			successor_with_tag_name = test_node;
+			break;
 		}
 	}
 	return successor_with_tag_name;

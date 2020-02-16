@@ -437,6 +437,7 @@ DM_idm_h DM_get_nodes_by_tag_name(DM_node* parent, DM_node_list** output_nodes, 
 			count = 1;
 		}		
 	}
+	/*recursion*/
 	if ((parent->nchild) != 0) {
 		for (int i=0;i<(parent->nchild);i++){
 			count += DM_get_nodes_by_tag_name(
