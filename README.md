@@ -63,9 +63,9 @@ See `simulated_data.R` for more information
 
 The easiest way to get Debian/Ubuntu on your Win10 system might be using the Windows Subsystem for Linux (WSL). 
 1. Set up WSL first by following [the guide](https://docs.microsoft.com/en-us/windows/wsl/install-win10).
-2. Get [Debian](https://www.microsoft.com/en-us/p/debian/9msvkqc78pk6)/[Ubuntu](https://www.microsoft.com/en-us/p/ubuntu/9nblggh4msv6) from Microsoft Store. 
+2. Get [Debian](https://www.microsoft.com/en-us/p/debian/9msvkqc78pk6) or [Ubuntu](https://www.microsoft.com/en-us/p/ubuntu/9nblggh4msv6) from Microsoft Store. 
 3. Download and install [Xming X Server](https://sourceforge.net/projects/xming) for graphic display. 
-4. Launch the Xming app, then launch the Debian/Ubuntu app. Install unmixeels and all necessary software packages. 
+4. Launch the Xming app, then launch the Debian/Ubuntu app. Install unmixeels and all necessary software packages as mentioned above. 
 5. On the terminal of the Debian/Ubuntu app, run
    ```
    export DISPLAY=:0
