@@ -93,7 +93,7 @@ imgAndSI$SI_and_ADF_x_drift_corr(from_ADF_or_EFImg = 'ADF',1,109,1,61,'px',NA,NA
 # === skip the above if alignment is not needed. ===
 
 # subplot in 4x3
-par(mfcol=c(4,3))
+par(mfcol=c(3,4))
 
 # Bin the pixels and channels for higher SNR
 # For a multi-layer structure with the interface aligned in the y direction, 
@@ -141,6 +141,7 @@ EELSUnmixObj$do_plot_em_sig()
 # If a label is on each pixel where the endmembers are found or not. 
 EELSUnmixObj$do_plot_coef(plot_em_position=T)
 EELSUnmixObj$do_plot_residuals()
+EELSUnmixObj$do_plot_qq()
 
 imgAndSI$get_ADF()$plot_ADF()
 
@@ -151,7 +152,7 @@ imgAndSI$get_ADF()$plot_ADF()
 
 
 
-par(mfcol=c(3,3))
+par(mfcol=c(3,4))
 set.seed(3)
 
 use_simulated_data<-T
@@ -183,7 +184,7 @@ spikeCorrectedSI<-SpikeNoise$new(channelRes=2)$set_spec_with_xray(darkCorrectedS
 
 imgAndSI<-ImgAndSpecAlign$new(spikeCorrectedSI, origADFObj)
 
-par(mfcol=c(3,3))
+par(mfcol=c(3,4))
 SI_3d<-imgAndSI$get_SI()$clone()$binning_3d(nbin = 4, along = 'e')$binning_3d(nbin = 4, along = 'x')$binning_3d(nbin = 4, along = 'y')
 SI_3d_bkg_removed<-BkgRemoval$new(SI_3d)$set_params(SigELow = 452, SigEHigh = 470, BkgELow = 450, BkgEHigh = 470)$set_Bkg_Sig_algo_PolyOrtho(arg = list(poly_deg = 1))$get_Sig_as_SI()
 SI_3d_intensity<-BkgRemoval$new(SI_3d)$set_params(SigELow = 452, SigEHigh = 470, BkgELow = 370, BkgEHigh = 451)$set_Bkg_Sig_algo_Power()$get_Sig_as_SI()$gen_EFImg_from_3d(0,1,'pct')
@@ -205,6 +206,7 @@ EELSUnmixObj$set_p_fitted_coef_residuals_from_UnmixCore(UnmixCoreObj)
 EELSUnmixObj$do_plot_em_sig()
 EELSUnmixObj$do_plot_coef(plot_em_position=T)
 EELSUnmixObj$do_plot_residuals()
+EELSUnmixObj$do_plot_qq()
 
 imgAndSI$get_ADF()$plot_ADF()
 

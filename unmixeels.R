@@ -816,7 +816,7 @@ SpikeNoise<-R6Class ("SpikeNoise",
 # data.frame(l=c(452,522),h=c(470,560))
     set_protected_chs = function(e_low_and_high) {
       E<-private$.spec_with_xray$E
-      private$.protected_chs <- rowSums(sapply(seq_along(e_low_and_high),function(i){(E >= e_low_and_high$l[i]) & E < e_low_and_high$h[i]}))
+      private$.protected_chs <- rowSums(sapply(seq_along(e_low_and_high$l),function(i){(E >= e_low_and_high$l[i]) & E < e_low_and_high$h[i]}))
       invisible(self)
     },
     set_spike_list_init_2d = function() {
@@ -1015,7 +1015,12 @@ ResizeAndRotate<-R6Class ("ResizeAndRotate",
     crop_xy = function(x0,x1,y0,y1,type) {
       private$.SI$crop_xy(x0,x1,y0,y1,type)
       private$.ADF$crop_xy(x0,x1,y0,y1,type)
-      self$check_calib_consistency(x0,x1,y0,y1,type)
+      self$check_calib_consistency()
+      invisible(self)
+    },
+    binning_xy = function(nbinx=1,nbiny=1) {
+      private$.SI$binning_3d(nbin = nbinx, along = 'x')$binning_3d(nbin = nbiny, along = 'y')
+      private$.ADF$binning_2d(nbin = nbinx, along = 'x')$binning_2d(nbin = nbiny, along = 'y')
       invisible(self)
     }
   ), # EOF public
@@ -1913,8 +1918,11 @@ print(dim(to_display));print(dim(rasterArray))
           zlim=log(c(chisq_lb,chisq_ub)),col=terrain.colors(2^16),
           xlab=str_xlab,ylab=expression(paste("reduced ",chi^2)),xlim=map_xlim,asp=1)
       }
-
-    } #EOF do_plot_residuals
+    }, #EOF do_plot_residuals
+    do_plot_qq = function() {
+      residuals<-private$.residuals
+      qqnorm(c(residuals),pch=20,cex=.5,cex.lab=.95,main=""); qqline(c(residuals), col = 2)
+    }
   ), # EOF public
   private = list(
 
@@ -2363,13 +2371,14 @@ my_perm<-function(m,n){
       }
       invisible(self)
     },
-    set_param = function(dr_method = 'svd', pca_method = NA, noise_mag = 1, em_algo = 'p-sc-in-nfindr', optimize_em = T, manifold_dim = 1) {
+    set_param = function(dr_method = 'svd', pca_method = NA, noise_mag = 1, em_algo = 'p-sc-in-nfindr', optimize_em = T, manifold_dim = 1, show_unit_circle = T) {
       private$.dr_method <- dr_method
       private$.pca_method<- pca_method
       private$.noise_mag <- noise_mag
       private$.em_algo   <- em_algo
       private$.optimize_em<-optimize_em
       private$.manifold_dim<-manifold_dim
+      private$.show_unit_circle<-show_unit_circle
       invisible(self)
     },
     set_R_and_scale = function(vca_R, intensity_scale) {
@@ -2567,8 +2576,9 @@ my_perm<-function(m,n){
         ylab="Xp_shifted_normalized[2,]",
         xlim=c(-1.5,1.5),ylim=c(-1.5,1.5),asp=1)
       has_draw_circle<-require("plotrix") 
+      show_unit_circle<-private$.show_unit_circle
       for (k in seq_len(vca_N)) { 
-        if (has_draw_circle) {
+        if (has_draw_circle && show_unit_circle) {
           draw.circle(  private$.Xp_shifted_normalized_old[1,k],
             private$.Xp_shifted_normalized_old[2,k],private$.cut_off_radius[k],
             border=rgb(127, 8, 0, max = 255, alpha = 32)  )
@@ -2638,6 +2648,7 @@ my_perm<-function(m,n){
     .em_algo = 'p-sc-in-nfindr',
     .optimize_em = T,
     .manifold_dim = 1,
+    .show_unit_circle = T,
     .fitted = NA,
     .coef = NA,
     .residuals = NA,
