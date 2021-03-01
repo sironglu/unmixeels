@@ -10,7 +10,11 @@ unmixeels
 
 * This framework includes an "unsupervised" unmixing process. Reference spectra from other sources are not needed. 
 
-See `simulated_data.R` for more information
+See `simulated_data.R` for more information. 
+
+#### Reference: 
+> Lu, S. and Smith, D.J., 2020. A hyperspectral unmixing framework for energy-loss near-edge structure analysis. Ultramicroscopy, 218, p.113096. [DOI:10.1016/j.ultramic.2020.113096](https://doi.org/10.1016/j.ultramic.2020.113096)
+
 
 ![Screenshot](screenshot.png)
 
