@@ -118,26 +118,64 @@ SI_2d_intensity<-BkgRemoval$new(SI_2d)$set_params(SigELow = 452, SigEHigh = 470,
 # pass data to the unmix subroutine
 EELSUnmixObj<-EELSUnmix$new()$set_sig_for_unmix_from_SI(SI_2d_bkg_removed)$set_intensity_scale_for_Sig_from_ADF(SI_2d_intensity)$set_unmix_R_and_intensity_scale_for_unmix()$set_sig_for_fit_from_SI(SI_2d_bkg_removed)$set_unmix_R_for_fit()
 
+use_svd<-F
+if (use_svd) {
 # optimize_em  : Optimize the extracted endmembers
 # manifold_dim : Set the dimension of the local manifold, which will be used in the optimization. 
 # For 1D structure (layers, nanorods) manifold_dim=1
 # For 2D structure (bulk alloys) manifold_dim=2
 # For 0D structure (different particles) manifold_dim=0
 UnmixCoreObj<-UnmixCore$new()$set_param(dr_method = 'svd', pca_method = NA, noise_mag = 1, em_algo = 'p-sc-in-nfindr', optimize_em = T, manifold_dim = 1)
+
 UnmixCoreObj<-EELSUnmixObj$UnmixCore_set_R_for_unmix(UnmixCoreObj)
 
 # max_p defines the maximum number of endmembers in the search
 # The subroutine tries from 1 until find a suitable p or p reaches max_p
 UnmixCoreObj$find_p(max_p = 3)
 
-UnmixCoreObj$do_plot()
+} else {
+# or, you can define your own dimensionality reduction function. 
+# Here we use sammon plot for example. 
+UnmixCoreObj<-UnmixCore$new()$set_param(dr_method = 'manifold_general', pca_method = (function(R,k){
+  # use_sammon
+    require("Rdimtools")
+    res<-do.sammon(t(R), ndim=k)
+    Xp<-t(res$Y)
+    Rp<-t(R)
+    u<-array(0,dim=c(dim(R)[1],k))
+    Xp_shifted<-Xp
+  list(Rp = Rp, Xp=Xp, u=u, Xp_shifted=Xp_shifted)
+}), noise_mag = 1, em_algo = 'p-sc-in-nfindr', optimize_em = T, manifold_dim = 1)
+
+UnmixCoreObj<-EELSUnmixObj$UnmixCore_set_R_for_unmix(UnmixCoreObj)
+UnmixCoreObj$set_p(3)$do_dim_reduction_and_em_extraction_from_p()
+
+}
+
+
+
+# map_type defines type of plot, possible values are "p" for points, "l" for lines & etc. 
+# See ?plot for details.
+# fig_out is an array of T or F which defines what to plot. 
+# elements of the array defines if 
+# 1. plot_signature
+# 2. plot_score 
+# 3. plot_Xp_shifted_normalized
+# 4. plot_xp_shifted_12
+# 5. plot_xp_shifted_13
+# Where xp_shifted is the low-dimensional map of the data
+UnmixCoreObj$do_plot(map_type="p",fig_out=c(T,T,T,T,T))
 
 UnmixCoreObj<-EELSUnmixObj$UnmixCore_set_R_for_fit(UnmixCoreObj)
 UnmixCoreObj$mlls()
 
 EELSUnmixObj$set_p_fitted_coef_residuals_from_UnmixCore(UnmixCoreObj)
 
-EELSUnmixObj$do_plot_em_sig()
+# plot the endmember signatures. 
+# em_index_for_color_map is an array defines the RGB color maps to which endmember. 
+# e.g., em_index_for_color_map=c(1,3,2) makes the 1st endmember to be red, 
+#       3rd to be blue, and 2nd to be green. 
+EELSUnmixObj$do_plot_em_sig(em_index_for_color_map=NA)
 # If a label is on each pixel where the endmembers are found or not. 
 EELSUnmixObj$do_plot_coef(plot_em_position=T)
 EELSUnmixObj$do_plot_residuals()

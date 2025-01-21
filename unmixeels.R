@@ -1,16 +1,17 @@
+options('unmixeels.verbose'	= T )
+options('use_cuda' = T)
+
 dyn.load("libdmformat/libdmformat.so")
-dyn.load("my_gaussian_1.so")
+dyn.load("offload/unmixeels_c_offload.so")
+
+if (getOption('use_cuda') == T) {
+  dyn.load("offload/unmixeels_cuda_offload.so")
+}
+
 library(R6)
 #library(abind)
 
-#_begin_onload
-  options('unmixeels.verbose'	= T )
-#_end_onload
 
-
-#_begin_test
-
-#_end_test
 
 ThreeDimData<-R6Class( "ThreeDimData",
   public = list(
@@ -92,7 +93,6 @@ ThreeDimData<-R6Class( "ThreeDimData",
         out <-t(out)
       }
       out
-###################
     },
     data_binning_3d = function(nbin,along) {
       if (self$get_num_dims() != 3) {
@@ -160,10 +160,15 @@ SIorImg<-R6Class( "SIorImg",
       private$.Cnt <- value
       invisible(self)
     },
-    set_SIorImg = function(numberOfDims,calib,Cnt) {
+    set_addr = function(value) {
+      private$.addr <-value
+      invisible(self)
+    },
+    set_SIorImg = function(numberOfDims,calib,Cnt,addr=NA) {
       self$set_numberOfDims(numberOfDims)
       self$set_calib(calib)
       self$set_Cnt(Cnt)
+      self$set_addr(addr)
       if (length(dim(Cnt))!=numberOfDims) {
         message(sprintf("Warn: dimension of Cnt is %d, but dimension of numberOfDims is %d. Set anyway...", length(dim(Cnt)), numberOfDims))
       }
@@ -172,7 +177,7 @@ SIorImg<-R6Class( "SIorImg",
     # type is one of ("pct","px","unit"), 
     # with pct between 0-1, px starts from 1
     # and unit starts from 0 (nm)
-    convert_to_index = function(x_n, n, type) {
+    convert_to_index = function(x_n, n, type, check=T) {
       if (private$.numberOfDims < n) {
         message(sprintf("Error: Dim specified is %d but dim of data is %d", n, private$.numberOfDims))
       } 
@@ -187,18 +192,28 @@ SIorImg<-R6Class( "SIorImg",
       } else {
         message("Error: crop type is wrong! Must be one of (\"pct\",\"px\",\"unit\")")
       }
-      if (x_n_out > dim(private$.Cnt)[n] ) {
-        x_n_out <- dim(private$.Cnt)[n]
-      } else if (x_n_out < 1 ) {
-        x_n_out <- 1
+      if (check) {
+        if (x_n_out > dim(private$.Cnt)[n] ) {
+          x_n_out <- dim(private$.Cnt)[n]
+        } else if (x_n_out < 1 ) {
+          x_n_out <- 1
+        }
       }
       x_n_out
+    }, 
+    shift_xy_Origin = function(x_shift, y_shift, type) { 
+      x_shift<-self$convert_to_index(x_shift, 1, type, check=F)
+      y_shift<-self$convert_to_index(y_shift, 2, type, check=F)
+      private$.calib$Origin[1]<- private$.calib$Origin[1] - x_shift 
+      private$.calib$Origin[2]<- private$.calib$Origin[2] - y_shift 
+      invisible(self)
     }
-  ),
+  ), # EOF public
   private = list(
     .numberOfDims	= 0,
     .calib		= NULL,
-    .Cnt		= NA
+    .Cnt		= NA,
+    .addr		= NA
   ),
   active = list(
     numberOfDims = function(value){
@@ -224,7 +239,15 @@ SIorImg<-R6Class( "SIorImg",
         message("Warn: You are changing Cnt")
         private$.Cnt<-value
       } # EOF if missing value
-    } # EOF Cnt
+    },
+    addr = function(value) {
+      if (missing(value)) {
+        private$.addr
+      } else {
+        message("Warn: Your are changing addr")
+        private$.addr<-value
+      }
+    } # EOF addr
   ) # EOF active
 ) # EOF SIorImg
 
@@ -237,8 +260,8 @@ OrigSI<-R6Class ("OrigSI",
       private$.E<-value
       invisible(self)
     }, 
-    set_SI = function(numberOfDims,calib,E,Cnt) {
-      self$set_SIorImg(numberOfDims,calib,Cnt)
+    set_SI = function(numberOfDims,calib,E,Cnt,addr=NA) {
+      self$set_SIorImg(numberOfDims,calib,Cnt,addr)
       self$set_E(E)
       invisible(self)
     }, 
@@ -302,23 +325,27 @@ OrigSI<-R6Class ("OrigSI",
       invisible(self)
     },
     crop_xy = function(x0,x1,y0,y1,type) {
-      self$convert_to_3d_with_warn()
-      x0<-self$convert_to_index(x0, 1, type)
-      x1<-self$convert_to_index(x1, 1, type)
-      y0<-self$convert_to_index(y0, 2, type)
-      y1<-self$convert_to_index(y1, 2, type)
-      private$.Cnt<-private$.Cnt[x0:x1,y0:y1,,drop=F]
-      private$.calib$Origin[1]<- private$.calib$Origin[1] - (x0-1)
-      private$.calib$Origin[2]<- private$.calib$Origin[2] - (x0-1)
+      if (!(is.na(x0) || is.na(x1) || is.na(y0) || is.na(y1) || is.na(type))) {
+        self$convert_to_3d_with_warn()
+        x0<-self$convert_to_index(x0, 1, type)
+        x1<-self$convert_to_index(x1, 1, type)
+        y0<-self$convert_to_index(y0, 2, type)
+        y1<-self$convert_to_index(y1, 2, type)
+        private$.Cnt<-private$.Cnt[x0:x1,y0:y1,,drop=F]
+        private$.calib$Origin[1]<- private$.calib$Origin[1] - (x0-1)
+        private$.calib$Origin[2]<- private$.calib$Origin[2] - (x0-1)
+      }
       invisible(self)
     },
     crop_e = function(e0, e1, type) {
-      self$convert_to_3d_with_warn()
-      e0<-self$convert_to_index(e0, 3, type)
-      e1<-self$convert_to_index(e1, 3, type)
-      private$.E<-private$.E[e0:e1]
-      private$.Cnt<-private$.Cnt[,,e0:e1,drop=F]
-      private$.calib$Origin[3]<-private$.calib$Origin[3] - (e0-1)
+      if (!(is.na(e0) || is.na(e1) )) {
+        self$convert_to_3d_with_warn()
+        e0<-self$convert_to_index(e0, 3, type)
+        e1<-self$convert_to_index(e1, 3, type)
+        private$.E<-private$.E[e0:e1]
+        private$.Cnt<-private$.Cnt[,,e0:e1,drop=F]
+        private$.calib$Origin[3]<-private$.calib$Origin[3] - (e0-1)
+      }
       invisible(self)
     },
     shift_e = function(eshift_approx = 0) {
@@ -369,7 +396,7 @@ OrigSI<-R6Class ("OrigSI",
       }
       invisible(self)
     }, 
-    set_SI_from_EELS_file = function(filename){
+    set_SI_from_EELS_file = function(filename, with_name="EELS", n_ImageTag=0, copy_data=1){
 	DM_filemap <-  .C("DM_file_mmap", addr = raw(8), filename=filename, fd = integer(1))
 	if (sum(DM_filemap$addr != raw(8)) == 0) {
 		return(NULL)
@@ -378,20 +405,33 @@ OrigSI<-R6Class ("OrigSI",
 	message(sprintf("DMversion is %d.", dm_version))
 	if (dm_version==4) {
 		R_DM4_create_root<-.C("R_DM4_create_root", root = raw(8), DM_file_header = DM_filemap$addr)
-		DM_get_image1<-.C("DM4_get_image1", root = R_DM4_create_root$root, with_name="EELS", Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
-
+		DM_get_image1<-.C("DM4_get_image1", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(2), data_type = integer(1))
+		DM_get_image1$data_length<-(function(l){((l<0)*2^32+l)%*%c(1,2^32)})(DM_get_image1$data_length)
+		message(sprintf("Data length is %f.", DM_get_image1$data_length))
 		if (DM_get_image1$data_type == 7) {
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name="EELS", Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length)) 
+#			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length))
+			message(sprintf("Info: EELS data type is double float (type 7)"))
+			DM_get_image2<-list(root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = {function(copy_data){if (copy_data) {double(DM_get_image1$data_length)} else {"0x0000000000000000"}}}(copy_data), R_copy_data = as.integer(copy_data))
+			.Call("DM4_get_image2_4gb", DM_get_image2$root, DM_get_image2$n_ImageTag,  DM_get_image2$with_name, DM_get_image2$Units, DM_get_image2$dimension_len, DM_get_image2$data, as.integer(7), DM_get_image2$R_copy_data)
 		} else if (DM_get_image1$data_type == 6){
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name="EELS", Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length)) } 
+			#DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length)) 
+			message(sprintf("Info: EELS data type is single float (type 6)"))
+			DM_get_image2<-list(root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = {function(copy_data){if (copy_data) {single(DM_get_image1$data_length)} else {"0x0000000000000000"}}}(copy_data), R_copy_data = as.integer(copy_data))
+			.Call("DM4_get_image2_4gb", DM_get_image2$root, DM_get_image2$n_ImageTag, DM_get_image2$with_name, DM_get_image2$Units, DM_get_image2$dimension_len, DM_get_image2$data, as.integer(6), DM_get_image2$R_copy_data)
+		} else {
+		message(sprintf("Error: data type (%d) of image is not imported. ", DM_get_image1$data_type))
+		}
 	} else if (dm_version==3) {
 		R_DM3_create_root<-.C("R_DM3_create_root", root = raw(8), DM_file_header = DM_filemap$addr)
-		DM_get_image1<-.C("DM3_get_image1", root = R_DM3_create_root$root, with_name="EELS", Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
+		DM_get_image1<-.C("DM3_get_image1", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
 
 		if (DM_get_image1$data_type == 7) {
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name="EELS", Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else if (DM_get_image1$data_type == 6){
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name="EELS", Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length)) } 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=with_name, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length), copy_data = as.integer(1)) 
+		} else {
+		message(sprintf("Error: data type (%d) of image is not imported. ", DM_get_image1$data_type))
+		}
 	} else {
 		message(sprintf("DMversion %d is not supported", dm_version))
 		return(NULL)
@@ -413,10 +453,16 @@ OrigSI<-R6Class ("OrigSI",
 	}
 	if (origSpec_calib$Units[[i]]!="eV") {
 #	if (is.null(origSpec_E)) {
-		message(sprintf("Warn: Unit of %dnd dimension is not eV, but %s", origSpec_numberOfDims, origSpec_calib$Units[[origSpec$numberOfDims]]))
+		message(sprintf("Warn: Unit of %dnd dimension is not eV, but %s", origSpec_numberOfDims, origSpec_calib$Units[[origSpec_numberOfDims]]))
 	}
-	origSpec_Cnt<-array(data=DM_get_image2$data,dim=dim_arr)
-	self$set_SI(origSpec_numberOfDims,origSpec_calib,origSpec_E,origSpec_Cnt) 
+	if (copy_data) {
+		origSpec_Cnt<-array(data=DM_get_image2$data,dim=dim_arr)
+		origSpec_addr = NA
+	} else {
+		origSpec_Cnt<-NA
+		origSpec_addr = list(data = DM_get_image2$data, dim=dim_arr)
+	}
+	self$set_SI(origSpec_numberOfDims,origSpec_calib,origSpec_E,origSpec_Cnt,origSpec_addr) 
         invisible(self)
     } 
   ),
@@ -494,14 +540,16 @@ OrigADF<-R6Class ("OrigADF",
     # with pct between 0-1, px starts from 1
     # and unit starts from 0 (nm)
     crop_xy = function(x0,x1,y0,y1,type) {
-      self$convert_to_2d_with_warn()
-      x0<-self$convert_to_index(x0, 1, type)
-      x1<-self$convert_to_index(x1, 1, type)
-      y0<-self$convert_to_index(y0, 2, type)
-      y1<-self$convert_to_index(y1, 2, type)
-      private$.Cnt<-private$.Cnt[x0:x1,y0:y1,drop=F]
-      private$.calib$Origin[1]<- private$.calib$Origin[1] - (x0-1)
-      private$.calib$Origin[2]<- private$.calib$Origin[2] - (x0-1)
+      if (!(is.na(x0) || is.na(x1) || is.na(y0) || is.na(y1) || is.na(type))) {
+        self$convert_to_2d_with_warn()
+        x0<-self$convert_to_index(x0, 1, type)
+        x1<-self$convert_to_index(x1, 1, type)
+        y0<-self$convert_to_index(y0, 2, type)
+        y1<-self$convert_to_index(y1, 2, type)
+        private$.Cnt<-private$.Cnt[x0:x1,y0:y1,drop=F]
+        private$.calib$Origin[1]<- private$.calib$Origin[1] - (x0-1)
+        private$.calib$Origin[2]<- private$.calib$Origin[2] - (x0-1)
+      }
       invisible(self)
     },
     binning_2d = function (nbin, along) {
@@ -522,10 +570,14 @@ OrigADF<-R6Class ("OrigADF",
      }
       invisible(self)
     },
-    plot_ADF = function() {
+    plot_ADF = function(useRaster=F,zlim=c(0.00,1.00)) {
 
       calib<-private$.calib
       Cnt<-private$.Cnt
+      qlow<-quantile(Cnt,zlim[1])
+      qhigh<-quantile(Cnt,zlim[2])
+      Cnt<-(Cnt-qlow)/(qhigh-qlow)
+      Cnt<-Cnt-(Cnt*(Cnt<0))-((Cnt-1)*(Cnt>1))
       rulxlab<-seq(from=calib$Scale[1]*(-calib$Origin[1]+.5),by=calib$Scale[1],length.out=dim(Cnt)[1])
       rulylab<-seq(from=calib$Scale[2]*(-calib$Origin[2]+.5),by=calib$Scale[2],length.out=dim(Cnt)[2])
 
@@ -535,11 +587,15 @@ OrigADF<-R6Class ("OrigADF",
       str_xlab<-sprintf("x/%s",calib$Units[1])
       str_ylab<-sprintf("y/%s",calib$Units[2])
 
+      if (dim(Cnt)[2]==1) {
+        plot(rulxlab,Cnt[,1],xlab=str_xlab,ylab="Count/arb. unit",xlim=map_xlim,las=1,type="l")
+      } else {
       image(rulxlab, rulylab, Cnt , col=gray((0:2^16)/2^16), 
-        xlab=str_xlab,ylab=str_ylab,xlim=map_xlim, ylim=map_ylim, asp=1)
+        xlab=str_xlab,ylab=str_ylab,xlim=map_xlim, ylim=map_ylim, asp=1, las=1, useRaster=useRaster)
+      }
       invisible(self)
     },
-    set_ADF_from_ADF_file = function(adf_filename,with_si_filename){
+    set_ADF_from_ADF_file = function(adf_filename,with_si_filename,n_ImageTag=0){
 	withname<-with_si_filename ; filename<-adf_filename
 	DM_filemap <-  .C("DM_file_mmap", addr = raw(8), filename=filename, fd = integer(1))
 	if (sum(DM_filemap$addr != raw(8)) == 0) {
@@ -549,34 +605,33 @@ OrigADF<-R6Class ("OrigADF",
 	message(sprintf("DMversion is %d.", dm_version))
 	if (dm_version==4) {
 		R_DM4_create_root<-.C("R_DM4_create_root", root = raw(8), DM_file_header = DM_filemap$addr)
-		DM_get_image1<-.C("DM4_get_image1", root = R_DM4_create_root$root, with_name=withname, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
-
+		DM_get_image1<-.C("DM4_get_image1", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
 		if (DM_get_image1$data_type == 7) { #double
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else if (DM_get_image1$data_type == 6) { # single
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else if (DM_get_image1$data_type == 5) { # ULONG
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length), copy_data = as.integer(1)) 
 			message(sprintf("data_type ULONG, but using signed int32"))
 		} else if (DM_get_image1$data_type == 3) { # LONG
-			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM4_get_image2", root = R_DM4_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else {
 			message(sprintf("data_type %d is not implemented in getADFData!", DM_get_image1$data_type))
 		}	
 	}  else if (dm_version==3) {
 		R_DM3_create_root<-.C("R_DM3_create_root", root = raw(8), DM_file_header = DM_filemap$addr)
 		# 4 is enough. 8 is for int64
-		DM_get_image1<-.C("DM3_get_image1", root = R_DM3_create_root$root, with_name=withname, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
+		DM_get_image1<-.C("DM3_get_image1", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Origin = double(4), Scale = double(4), dimensions = integer(8), dimension_len = integer(1), data_length = integer(1), data_type = integer(1))
 
 		if (DM_get_image1$data_type == 7) {
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = double(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else if (DM_get_image1$data_type == 6){
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = single(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else if (DM_get_image1$data_type == 5) { # ULONG
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length), copy_data = as.integer(1)) 
 			message(sprintf("data_type ULONG, but using signed int32"))
 		} else if (DM_get_image1$data_type == 3) { # LONG
-			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length)) 
+			DM_get_image2<-.C("DM3_get_image2", root = R_DM3_create_root$root, n_ImageTag=as.integer(n_ImageTag), with_name=withname, Units = rep(paste(rep(" ",8),collapse=''), DM_get_image1$dimension_len), dimension_len = integer(1), data = integer(DM_get_image1$data_length), copy_data = as.integer(1)) 
 		} else {
 			message(sprintf("Error: data_type %d is not implemented in getADFData!", M_get_image1$data_type))
 		}
@@ -705,8 +760,22 @@ SpikeNoise<-R6Class ("SpikeNoise",
       smthWindow<-private$.smthWindow
       AlphaInit<-private$.smthWindow/private$.channelRes
       n_sigma_threshold_sq_1pass<-(private$.n_sigma_1)^2
-      smth_cnt<-t(sapply(1:dim(cnt_in)[1],function(i){
+# begin CPU hot spot
+      if (!getOption('use_cuda')) {
+      smth_cnt_aa<-t(sapply(1:dim(cnt_in)[1],function(i){
         self$my_gaussian(cnt_in[i,],window=smthWindow,alpha=AlphaInit, tails=TRUE)}))
+      } else {
+       smth_cnt_bb<-t(array(.C("cuda_smth_cnt", cnt_out=double(prod(dim(cnt_in))), 
+        cnt_in=as.double(t(cnt_in)), cnt_dims=as.integer(rev(dim(cnt_in))), 
+        window=as.integer(smthWindow), alpha=as.double(AlphaInit), 
+        tails=as.integer(1))$cnt_out,dim=rev(dim(cnt_in))))
+      }
+      if (!getOption('use_cuda')) {
+        smth_cnt<-smth_cnt_aa
+      } else {
+        smth_cnt<-smth_cnt_bb
+      }
+# end CPU hot spot
       residu_cnt<-cnt_in - smth_cnt
       sample_index<-sample(1:prod(dim(residu_cnt)),min(40000,prod(dim(residu_cnt))))
       c_residu_sq_cnt<-(c(residu_cnt)[sample_index])^2
@@ -716,11 +785,11 @@ SpikeNoise<-R6Class ("SpikeNoise",
       c_residu_sq_cnt<-c_residu_sq_cnt[-too_large_to_be_sample]
       c_smth_cnt<-c_smth_cnt[-too_large_to_be_sample]
       # dark noise is a constant, Poisson noise is prop to count. do a linear fitting 
-      noise_fm0<-lm(c_residu_sq_cnt~c_smth_cnt)
-      if (getOption('unmixeels.verbose') == T) {
-        print("Info: spike noise removal fitting coefficients:")
-        print(noise_fm0$coefficients)
-      }
+#      noise_fm0<-lm(c_residu_sq_cnt~c_smth_cnt)
+#      if (getOption('unmixeels.verbose') == T) {
+#        print("Info: spike noise removal fitting coefficients:")
+#        print(noise_fm0$coefficients)
+#      }
       #residu_cnt_pred<-min(0,noise_fm0$coefficients[1])+smth_cnt*min(1,max(0,noise_fm0$coefficients[2]))
       residu_cnt_pred<-array(mean(c_residu_sq_cnt),dim=dim(smth_cnt))
       #expvalidcntlogpredany<-predict(expvalidfm0,expvaliddataany,interval="confidence")
@@ -733,15 +802,17 @@ SpikeNoise<-R6Class ("SpikeNoise",
       return(lst_of_potential_bad_pt)
     },
     remove_spike_in_row_by_l_and_r = function(row, l, r) {
-      if (r-l<2) {
-        rowout<-row
-      } else {
-        s <- row[l:r]
-        x <- 1:(r-l+1)
-        s[2:(r-l)]<-NA
-        row[l:r]<-predict(lm(s~x),data.frame(x=x))
-        rowout<-row
-      }
+#      if (r-l<2) {
+#        rowout<-row
+#      } else {
+#        s <- row[l:r]
+#        x <- 1:(r-l+1)
+#        s[2:(r-l)]<-NA
+#        row[l:r]<-predict(lm(s~x),data.frame(x=x))
+#        rowout<-row
+#      }
+      rowlen<-length(row)
+      rowout<-.C("c_remove_spike_in_row_by_l_and_r",row=as.double(row), l=as.integer(l), r=as.integer(r), rowout=double(rowlen), rowlen=as.integer(rowlen))$rowout
       rowout
     },
     find_spike_l_and_r_in_row = function(row, lrinit) {
@@ -1018,6 +1089,11 @@ ResizeAndRotate<-R6Class ("ResizeAndRotate",
       self$check_calib_consistency()
       invisible(self)
     },
+    shift_xy_Origin = function(x_shift, y_shift, type) { 
+      private$.SI$shift_xy_Origin(x_shift, y_shift, type)
+      private$.ADF$shift_xy_Origin(x_shift, y_shift, type)
+      invisible(self)
+    },
     binning_xy = function(nbinx=1,nbiny=1) {
       private$.SI$binning_3d(nbin = nbinx, along = 'x')$binning_3d(nbin = nbiny, along = 'y')
       private$.ADF$binning_2d(nbin = nbinx, along = 'x')$binning_2d(nbin = nbiny, along = 'y')
@@ -1041,26 +1117,32 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
     # Positive drift value will lead to a selection of range towards the negative direction. 
     # (the line will be shifted to the positive direction)
     img_x_drift_by_arr_cut = function(x_drift_arr_all,img){
-      timg<-t(img)
-      #x_drift_arr_all<-c(0,x_drift_arr)
-      left_cut<-max(x_drift_arr_all)+1
-      right_cut<-ncol(timg)+min(x_drift_arr_all)
-      sapply(seq_along(x_drift_arr_all),function(i){
-        timg[i,(left_cut-x_drift_arr_all[i]):(right_cut-x_drift_arr_all[i])]
-      })
+      x_drift_arr_all_int<-as.integer(round(x_drift_arr_all))
+      left_cut<-max(x_drift_arr_all_int)-min(x_drift_arr_all_int)+1
+      right_cut<-dim(img)[1]
+      self$img_x_drift_by_arr_nocut(x_drift_arr_all,img)[left_cut:right_cut,,drop=F]
     },
     #Do not cut blank edge for img
     img_x_drift_by_arr_nocut = function(x_drift_arr_all,img){
+      x_drift_arr_all_int<-as.integer(round(x_drift_arr_all))
       old_dim<-dim(img)
-      new_dim<-old_dim+c(max(x_drift_arr_all)-min(x_drift_arr_all),0)
+      new_dim<-old_dim+c(max(x_drift_arr_all_int)-min(x_drift_arr_all_int),0)
       outimg<-array(NA,dim=new_dim)
-      origShift<- -min(x_drift_arr_all)
+      origShift<- -min(x_drift_arr_all_int)
       origWidth<-old_dim[1]
-      sapply(seq_along(x_drift_arr_all),function(i){
-        outimg[(origShift+x_drift_arr_all[i]+1):(origShift+x_drift_arr_all[i]+origWidth),i]<-img[,i]
-        outimg[,i]
-      })
-#      return(outimg)
+#      if (private$.drift_subpix_interpolation) {
+#        outimg<-sapply(seq_along(x_drift_arr_all), function(i){
+#          outimg[(origShift+x_drift_arr_all_int[i]+1):(origShift+x_drift_arr_all_int[i]+origWidth),i]<-approx(x=seq_len(old_dim[1]),y=img[,i],xout=seq_len(old_dim[1])-(x_drift_arr_all[i]-x_drift_arr_all_int[i]))$y
+#        outimg[,i]
+#        })
+#      } else {
+#        outimg<-sapply(seq_along(x_drift_arr_all_int),function(i){
+#          outimg[(origShift+x_drift_arr_all_int[i]+1):(origShift+x_drift_arr_all_int[i]+origWidth),i]<-img[,i]
+#          outimg[,i]
+#        })
+      outimg<-array(.C("img_x_drift_by_arr_nocut_f1", inImg=as.double(img), outImg=as.double(outimg), inDim=as.integer(old_dim), outDim=as.integer(new_dim), origShift=as.integer(origShift), x_drift_arr_all_int=as.integer(x_drift_arr_all_int), x_drift_arr_all=as.double(x_drift_arr_all), subpix=as.integer(private$.drift_subpix_interpolation) ,NAOK=T)$outImg,dim=new_dim)
+#      }
+      return(outimg)
     },
     img_x_drift_by_arr = function(x_drift_arr_all,img){
 	if (private$.keep_scrap_x) {
@@ -1069,63 +1151,47 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
 		return(self$img_x_drift_by_arr_cut(x_drift_arr_all,img))
 	}
     },
-    spec_x_drift_by_arr_cut = function(x_drift_arr_all_int,InSpecCnt){
-      old_dim<-dim(InSpecCnt)
-      new_dim<-old_dim+c(min(x_drift_arr_all_int)-max(x_drift_arr_all_int),0,0)
-      left_cut<-max(x_drift_arr_all_int)+1
-      #right_cut<-new_dim[1]+left_cut-1
-      right_cut<-old_dim[1]+min(x_drift_arr_all_int)
-      outSpecCnt<-array(NA,dim=new_dim)
-      for (i in seq_along(x_drift_arr_all_int)) {
-        outSpecCnt[,i,]<-InSpecCnt[(left_cut-x_drift_arr_all_int[i]):(right_cut-x_drift_arr_all_int[i]),i,]
-      }
-#      sapply(seq_along(x_drift_arr_all_int),function(i){outSpecCnt[,i,]<<-InSpecCnt[(left_cut-x_drift_arr_all_int[i]):(right_cut-x_drift_arr_all_int[i]),i,];})
-      return(outSpecCnt)
+    spec_x_drift_by_arr_cut = function(x_drift_arr_all,InSpecCnt){
+      x_drift_arr_all_int<-as.integer(round(x_drift_arr_all))
+      left_cut<-max(x_drift_arr_all_int)-min(x_drift_arr_all_int)+1
+      right_cut<-dim(InSpecCnt)[1]
+      self$spec_x_drift_by_arr_nocut(x_drift_arr_all,InSpecCnt)[left_cut:right_cut,,,drop=F]
     }, 
     #Do not cut blank edge for spec
-    spec_x_drift_by_arr_nocut = function(x_drift_arr_all_int,InSpecCnt){
+    spec_x_drift_by_arr_nocut = function(x_drift_arr_all,InSpecCnt){
+      x_drift_arr_all_int<-as.integer(round(x_drift_arr_all))
       old_dim<-dim(InSpecCnt)
       new_dim<-old_dim+c(max(x_drift_arr_all_int)-min(x_drift_arr_all_int),0,0)
       outSpecCnt<-array(NA,dim=new_dim)
       origShift<- -min(x_drift_arr_all_int)
       origWidth<-old_dim[1]
-      for (i in seq_along(x_drift_arr_all_int)) {
-        outSpecCnt[(origShift+x_drift_arr_all_int[i]+1):(origShift+x_drift_arr_all_int[i]+origWidth),i,]<-InSpecCnt[,i,]
+      for (i_e in seq_len(old_dim[3])) {
+        outSpecCnt[,,i_e]<-self$img_x_drift_by_arr_nocut(x_drift_arr_all,InSpecCnt[,,i_e])
       }
-#      sapply(seq_along(x_drift_arr_all_int),function(i){outSpecCnt[(origShift+x_drift_arr_all_int[i]+1):(origShift+x_drift_arr_all_int[i]+origWidth),i,]<<-InSpecCnt[,i,];})
       return(outSpecCnt)
     },
-    spec_x_drift_by_arr = function(x_drift_arr_all_int,InSpecCnt){
+    spec_x_drift_by_arr = function(x_drift_arr_all,InSpecCnt){
 	if (private$.keep_scrap_x) {
-		return(self$spec_x_drift_by_arr_nocut(x_drift_arr_all_int,InSpecCnt))
+		return(self$spec_x_drift_by_arr_nocut(x_drift_arr_all,InSpecCnt))
 	} else {
-		return(self$spec_x_drift_by_arr_cut(x_drift_arr_all_int,InSpecCnt))
+		return(self$spec_x_drift_by_arr_cut(x_drift_arr_all,InSpecCnt))
 	}
     }, 
-    spec_e_drift_along_y_by_arr_cut = function(e_drift_along_y_arr_all_int, InSpecCnt) {
+    spec_e_drift_along_y_by_arr_cut = function(e_drift_along_y_arr_all, InSpecCnt) {
        InSpecCnt<-aperm(InSpecCnt,c(3,2,1))
-       outSpecCnt<-self$spec_x_drift_by_arr_cut(e_drift_along_y_arr_all_int, InSpecCnt)
+       outSpecCnt<-self$spec_x_drift_by_arr_cut(e_drift_along_y_arr_all, InSpecCnt)
        aperm(outSpecCnt,c(3,2,1))
-#      old_dim<-dim(InSpecCnt)
-#      new_dim<-old_dim+c(0,0,min(e_drift_along_y_arr_all_int)-max(e_drift_along_y_arr_all_int))
-#      left_cut<-max(e_drift_along_y_arr_all_int)+1
-#      right_cut<-old_dim[3]+min(e_drift_along_y_arr_all_int)
-#      outSpecCnt<-array(NA,dim=new_dim)
-#      for (i in 1:length(e_drift_along_y_arr_all_int)) {
-#        outSpecCnt[,,i]<-InSpecCont[,i,(left_cut-e_drift_along_y_arr_all_int[i]):(right_cut-e_drift_along_y_arr_all_int[i]]
-#      }
-#      outSpecCnt
     },
-    spec_e_drift_along_y_by_arr_nocut = function(e_drift_along_y_arr_all_int, InSpecCnt) {
+    spec_e_drift_along_y_by_arr_nocut = function(e_drift_along_y_arr_all, InSpecCnt) {
       InSpecCnt<-aperm(InSpecCnt,c(3,2,1))
-      outSpecCnt<-self$spec_x_drift_by_arr_nocut(e_drift_along_y_arr_all_int, InSpecCnt)
+      outSpecCnt<-self$spec_x_drift_by_arr_nocut(e_drift_along_y_arr_all, InSpecCnt)
       aperm(outSpecCnt,c(3,2,1))
     },
-    spec_e_drift_along_y_by_arr = function(e_drift_along_y_arr_all_int, InSpecCnt) {
+    spec_e_drift_along_y_by_arr = function(e_drift_along_y_arr_all, InSpecCnt) {
 	if (private$.keep_scrap_e) {
-		return(self$spec_e_drift_along_y_by_arr_nocut(e_drift_along_y_arr_all_int,InSpecCnt))
+		return(self$spec_e_drift_along_y_by_arr_nocut(e_drift_along_y_arr_all,InSpecCnt))
 	} else {
-		return(self$spec_e_drift_along_y_by_arr_cut(e_drift_along_y_arr_all_int,InSpecCnt))
+		return(self$spec_e_drift_along_y_by_arr_cut(e_drift_along_y_arr_all,InSpecCnt))
 	}
     },
 ## a few more drift functions here 
@@ -1136,7 +1202,17 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
 	  x_drift_arr_int[fix_line] <- 0                   # do not drift fix_line
           # cor() does not support na.rm=T. Must use _cut
 	  img_drifted<-self$img_x_drift_by_arr_cut(x_drift_arr_int,img)
-	  sapply(seq_len(ncol(img_drifted)),function(i_x){cor(img_drifted[,fix_line],img_drifted[,i_x])})
+	  if (!getOption('use_cuda')) {
+	  aa<-sapply(seq_len(ncol(img_drifted)),function(i_x){cor(img_drifted[,fix_line],img_drifted[,i_x])})
+	  } else {
+          ab<-.C("img_cor", image_drifted=as.double(img_drifted), cor=double(ncol(img_drifted)), img_dims=as.integer(dim(img_drifted)), fixed_line=as.integer(fix_line-1))$cor
+          }
+          # print(aa);print(ab);print("sep")
+          if (!getOption('use_cuda')) {
+	          return(aa)
+          } else {
+	          return(ab)
+	  }
         })  # return a matrix of correction with a fix_line
 	    #(each col loops over x_drift_rng and each row loop over col of img)
     },
@@ -1196,8 +1272,23 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
         print("y_out:")
         print(y_out)
       }
+      y_out
     },
-
+    drift_arr_smth_nearest = function(arr_in, x_in = NULL, x_out = NULL) {
+      if (is.null(x_in)) {
+        x_in<-seq_along(arr_in)
+      }
+      if (is.null(x_out)) {
+        x_out<-x_in
+      }
+      y<-arr_in
+      y_out<-as.integer(round(approx(x=x_in,y=y,xout=x_out,rule=2)$y))
+      if (getOption('unmixeels.verbose') == T) {
+        print("y_out:")
+        print(y_out)
+      }
+      y_out
+    }, 
     drift_arr_smth = function(arr_in, smth_method, x_in = NULL, x_out = NULL, arg) {
       if (smth_method == 'poly') {
         if (is.null(arg$poly_deg)) {
@@ -1206,6 +1297,8 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
           # usage: drift_arr_smth_poly(arr_in, 'poly', list(poly_deg = 4))
           arr_out <- self$drift_arr_smth_poly(arr_in, x_in, x_out, arg)
         }
+      } else if (smth_method == 'nearest') {
+        arr_out <- self$drift_arr_smth_nearest(arr_in, x_in, x_out)
       } else {
         message("Warn: drift_arr_smth: smth_method not implemented!")
         arr_out <-arr_in
@@ -1219,10 +1312,13 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
       arr_out
     },
     img_x_drift_align_with_refine_calc_arr = function( image, x_drift_max_search_rep, 
-      x_drift_search_rng_init, x_drift_search_rng_2nd ) {
-      transformed_x_drift_img<-image
-      #x_drift_max_search_rep<-private$.x_drift_max_search_rep
-      x_drift_arr_all_int<-0
+      x_drift_search_rng_init, x_drift_search_rng_2nd, x_drift_arr_all_int=NA ) {
+      if (is.na(x_drift_arr_all_int)) {
+        transformed_x_drift_img<-image
+        x_drift_arr_all_int<-0
+      } else {
+	transformed_x_drift_img<-self$img_x_drift_by_arr_cut(x_drift_arr_all_int,image)
+      }
       for (i in seq_len(x_drift_max_search_rep)){
         if (i==1) {
           x_drift_search_rng<-x_drift_search_rng_init
@@ -1230,14 +1326,8 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
           x_drift_search_rng<-x_drift_search_rng_2nd
         }
         x_drift_arr_all<-self$img_vertical_align_calc_arr(transformed_x_drift_img,x_drift_search_rng)
-#        x_drift_arr_all_int_old<-x_drift_arr_all_int
-#        x_drift_arr_all_int<-self$img_vertical_align_calc_arr(transformed_x_drift_img,x_drift_search_rng)
         inc<-as.integer(round(x_drift_arr_all))
         x_drift_arr_all_int<-x_drift_arr_all_int+inc
-        if (sum(abs(inc))==0) {
-#        if (sum(abs(x_drift_arr_all_int_old-x_drift_arr_all_int))==0) {
-          break
-        }
         if (getOption('unmixeels.verbose') == T) {
           print("x_drift_arr_all_int")
           print(x_drift_arr_all_int)
@@ -1246,6 +1336,12 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
         if (getOption('unmixeels.verbose') == T) {
           image(1:nrow(transformed_x_drift_img),1:ncol(transformed_x_drift_img),transformed_x_drift_img,col=terrain.colors(2^16))
           lines(x_drift_arr_all_int-min(x_drift_arr_all_int),1:ncol(transformed_x_drift_img),type="b")
+        }
+        if (sum(abs(inc))==0) {
+          break
+        }
+        if (i==x_drift_max_search_rep) {
+          message(sprintf("Warn: x_drift_max_search_rep (%d) reached. ", i))
         }
       }
       x_lines<-1:ncol(image)
@@ -1259,18 +1355,29 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
       invisible(self)
     },
     img_set_x_drift_arr = function(val) {
-      private$.x_drift_arr_all_int<-as.integer(round(val))
+#      private$.x_drift_arr_all<-val
+      if (private$.drift_subpix_interpolation) {
+        private$.x_drift_arr_all_int<-val
+      } else {
+        private$.x_drift_arr_all_int<-as.integer(round(val))
+      }
       invisible(self)
     }, 
     spec_set_e_drift_along_y_arr = function(val) {
-      private$.e_drift_along_y_arr_all_int<-as.integer(round(val))
+#      private$.e_drift_along_y_arr_all<-val
+      if (private$.drift_subpix_interpolation) {
+        private$.e_drift_along_y_arr_all_int<-val
+      } else {
+        private$.e_drift_along_y_arr_all_int<-as.integer(round(val))
+      }
       invisible(self)
     },
     img_set_x_drift_arr_from_x_drift_img = function() {
       self$img_set_x_drift_arr(
         self$img_x_drift_align_with_refine_calc_arr(
           private$.x_drift_img, private$.x_drift_max_search_rep, 
-          private$.x_drift_search_rng_init, private$.x_drift_search_rng_2nd))
+          private$.x_drift_search_rng_init, private$.x_drift_search_rng_2nd, 
+          private$.x_drift_arr_all_int))
       invisible(self)
     },
     spec_set_e_drift_along_y_arr_from_e_drift_along_y_img = function() {
@@ -1281,6 +1388,9 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
     invisible(self)
     }, 
     img_smth_x_drift_arr = function(smth_method,y0,y1,type_y,arg = NULL) {
+      if (is.na(y0) || is.na(y1) || is.na(type_y)) {
+        y0<-0;y1<-1;type_y="pct"
+      }
       x_in <- (private$.SI$convert_to_index(y0,2,type_y)):(private$.SI$convert_to_index(y1,2,type_y))
       x_out<- seq_len(dim(private$.SI$Cnt)[2])
       self$img_set_x_drift_arr(self$drift_arr_smth(
@@ -1295,20 +1405,22 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
         private$.e_drift_along_y_arr_all_int,smth_method,x_in,x_out,arg))
       invisible(self)
     },
-    img_set_x_drift_params = function( keep_scrap_x = F, 
+    img_set_x_drift_params = function( keep_scrap_x = F, drift_subpix_interpolation = F, 
       x_drift_max_search_rep = 5, x_drift_search_rng_init = -15:15, 
       x_drift_search_rng_2nd = -5:5, x_drift_img = NA) {
       private$.keep_scrap_x <- keep_scrap_x
+      private$.drift_subpix_interpolation<-drift_subpix_interpolation
       private$.x_drift_max_search_rep <-x_drift_max_search_rep
       private$.x_drift_search_rng_init<-x_drift_search_rng_init
       private$.x_drift_search_rng_2nd <-x_drift_search_rng_2nd
       # self$img_set_x_drift_img(x_drift_img)
       invisible(self)
     },
-    spec_set_e_drift_along_y_params = function( keep_scrap_e = F, 
+    spec_set_e_drift_along_y_params = function( keep_scrap_e = F, drift_subpix_interpolation = F, 
       e_drift_along_y_max_search_rep = 5, e_drift_along_y_search_rng_init = -15:15, 
       e_drift_along_y_search_rng_2nd = -5:5, e_drift_along_y_img = NA) {
       private$.keep_scrap_e <- keep_scrap_e
+      private$.drift_subpix_interpolation<-drift_subpix_interpolation
       private$.e_drift_along_y_max_search_rep <- e_drift_along_y_max_search_rep
       private$.e_drift_along_y_search_rng_init <- e_drift_along_y_search_rng_init
       private$.e_drift_along_y_search_rng_2nd <- e_drift_along_y_search_rng_2nd
@@ -1349,6 +1461,11 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
         x_drift_max_search_rep = x_drift_max_search_rep,
         x_drift_search_rng_init = x_drift_search_rng_init, 
         x_drift_search_rng_2nd = x_drift_search_rng_2nd)
+      if (is.na(type_xy)) {
+        type_xy = 'px';x0<-0;y0<-0
+        x1<-dim(self$get_SI()$Cnt)[1]
+        y1<-dim(self$get_SI()$Cnt)[2]
+      }
       if (from_ADF_or_EFImg == 'EFImg') {
         self$img_set_x_drift_img(
             private$.SI$gen_EFImg_from_3d(e0,e1,type_e)$crop_xy(x0,x1,y0,y1,type_xy)$Cnt)
@@ -1371,6 +1488,10 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
           private$.SI$calib, private$.keep_scrap_e, 3, private$.e_drift_along_y_arr_all_int))
       invisible(self)
     }, 
+    SI_e_drift_along_y_delete_scrap_e = function() {
+      private$.SI$set_E(private$.SI$E[(max(private$.e_drift_along_y_arr_all_int)+1):(length(private$.SI$E)+min(private$.e_drift_along_y_arr_all_int))])
+      invisible(self)
+    },
     SI_e_drift_along_y_corr = function(x0,x1,y0,y1,type_xy,e0,e1,type_e,
       smth_method, arg = list(poly_deg = 3), e_drift_along_y_max_search_rep = 5, 
       e_drift_along_y_search_rng_init = -15:15, e_drift_along_y_search_rng_2nd = -5:5) {
@@ -1385,7 +1506,7 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
       self$spec_set_e_drift_along_y_arr_from_e_drift_along_y_img()
       self$spec_smth_e_drift_along_y_arr(smth_method,y0,y1,type_xy,arg)
       self$SI_do_e_drift_along_y_corr_from_arr()
-      private$.SI$set_E(private$.SI$E[(max(private$.e_drift_along_y_arr_all_int)+1):(length(private$.SI$E)+min(private$.e_drift_along_y_arr_all_int))])
+      self$SI_e_drift_along_y_delete_scrap_e()
       invisible(self)
     }
   ), #EOF public
@@ -1397,13 +1518,16 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
     .x_drift_search_rng_init = -15:15,
     .x_drift_search_rng_2nd = -5:5,
     .x_drift_img = NA,
+#    .x_drift_arr_all = NA, 
     .x_drift_arr_all_int = NA, 
     .keep_scrap_e = F,
     .e_drift_along_y_max_search_rep = 5,
     .e_drift_along_y_search_rng_init = -15:15, 
     .e_drift_along_y_search_rng_2nd = -5:5,
     .e_drift_along_y_img = NA,
-    .e_drift_along_y_arr_all_int = NA
+#    .e_drift_along_y_arr_all = NA,
+    .e_drift_along_y_arr_all_int = NA,
+    .drift_subpix_interpolation = F
   ), #EOF private
   active = list(
     x_drift_img = function(value) {
@@ -1420,6 +1544,22 @@ ImgAndSpecAlign<-R6Class ("ImgAndSpecAlign",
       } else {
         message("Warn: You are manually setting x_drift_arr_all_int")
         private$.x_drift_arr_all_int<-value
+      }
+    },
+    e_drift_along_y_img = function(value) {
+      if (missing(value)) {
+        private$.e_drift_along_y_img
+      } else {
+        message("Warn: You are manually setting e_drift_along_y_img")
+        private$.e_drift_along_y_img<-value
+      }
+    },
+    e_drift_along_y_arr_all_int = function(value) {
+      if (missing(value)) {
+        private$.e_drift_along_y_arr_all_int
+      } else {
+        message("Warn: You are manually setting e_drift_along_y_arr_all_int")
+        private$.e_drift_along_y_arr_all_int<-value
       }
     }
   ) # EOF active
@@ -1805,31 +1945,43 @@ EELSUnmix<-R6Class( "EELS_unmix",
       invisible(self)
     },
 
-    do_plot_em_sig = function() {
+    do_plot_em_sig = function(em_index_for_color_map = NA) {
       vca_p<-private$.p
       Ae<-private$.Ae
       EForUnmix<-private$.EForUnmix
       print(sprintf("Info: Number of EMs (p) : %d", vca_p))
       EForUnmix<-private$.EForUnmix
       calibForUnmix<-private$.calibForUnmix
-      plot(EForUnmix,5*Ae[,1]/max(abs(Ae)),type="l",col=2,ylim=range(5*Ae/max(abs(Ae))),xlab=sprintf("E/%s", calibForUnmix$Units[3]),ylab="Count/arb. unit",las=1)
-      if (vca_p>1) {
-        for (i in 2:vca_p) {
-          lines(EForUnmix, 5*Ae[,i]/max(abs(Ae)),col=i+1)
+      plot(EForUnmix,rep(NA,length(EForUnmix)),type="l",col=2,ylim=range(5*Ae/max(abs(Ae))),xlab=sprintf("E/%s", calibForUnmix$Units[3]),ylab="Count/arb. unit",las=1)
+      if ( (1 == length(em_index_for_color_map)) && is.na(em_index_for_color_map)) {
+        em_index_for_color_map<-1:vca_p
+      } 
+#      if (vca_p>1) {
+        for (i in seq_along(em_index_for_color_map)) {
+          rind<-em_index_for_color_map[i] 
+          if (rind == 0) {
+            Ae4Map<-rep(NA,length(EForUnmix))
+          } else {
+            Ae4Map<-5*Ae[,rind]/max(abs(Ae))
+          }
+          lines(EForUnmix, Ae4Map,col=i+1)
         }
-      }
+#      }
       invisible(self)
     }, 
-    do_plot_coef = function(plot_em_position = T, em_index_for_color_map = NA) {
+    do_plot_coef = function(plot_em_position = T, em_index_for_color_map = NA, minzero=F, plot_sum_line = T) {
       vca_p<-private$.p
       coef<-private$.coef
       EForFit<-private$.EForFit
       indice<-private$.indice
-
+      if ( (1 == length(em_index_for_color_map)) && is.na(em_index_for_color_map)) {
+        em_index_for_color_map<-1:vca_p
+      }
+      indice_for_map<-sapply(em_index_for_color_map,function(x){if (x==0) {0} else {indice[x]}})
       calibForFit<-private$.calibForFit
       rulxlab<-seq(from=calibForFit$Scale[1]*(-calibForFit$Origin[1]+.5),by=calibForFit$Scale[1],length.out=dim(coef)[1])
       rulylab<-seq(from=calibForFit$Scale[2]*(-calibForFit$Origin[2]+.5),by=calibForFit$Scale[2],length.out=dim(coef)[2])
-      indice_position_x<-(rulxlab[indice[]])
+      indice_position_x<-sapply(indice_for_map, function(x){if (x==0) {NA} else {rulxlab[x]}});
       map_xlim<-c( calibForFit$Scale[1]*(-calibForFit$Origin[1]), calibForFit$Scale[1]*(-calibForFit$Origin[1]+dim(coef)[1]) )
       map_ylim<-c( calibForFit$Scale[2]*(-calibForFit$Origin[2]), calibForFit$Scale[2]*(-calibForFit$Origin[2]+dim(coef)[2]) )
 
@@ -1837,17 +1989,25 @@ EELSUnmix<-R6Class( "EELS_unmix",
       str_ylab<-sprintf("y/%s",calibForFit$Units[2])
       if (dim(coef)[2] == 1) {
         coef<-coef/max(coef)
+        coef_tmp<-array(NA,dim=dim(coef)+c(0,0,1))
+        coef_tmp[,,2:(1+dim(coef)[3])]  <- coef
         sum_line<-rowSums(coef[,1,,drop=F])
-        line_ylim<-range(c(coef, sum_line))
+        if (plot_sum_line) {
+          line_ylim<-range(c(coef, sum_line))
+        } else {
+          line_ylim<-range(c(coef))
+        }
         if (plot_em_position) {
           line_ylim_new<-c(min(line_ylim)-.1*(max(line_ylim)-min(line_ylim)),max(line_ylim))
-          plot(indice_position_x,rep(min(line_ylim_new),vca_p),pch="+",col=2:(vca_p+1),cex=5,xlim=map_xlim,ylim=line_ylim_new,las=1,cex.axis=1,cex.lab=1, xaxs="i", yaxs="i",ylab="Coefficients/arb. unit",xlab=str_xlab)
-          lines(rulxlab,sum_line,type="l",ylim=line_ylim_new,col=1,xaxs="i")
+          plot(indice_position_x, 5*rep(min(line_ylim_new),length(em_index_for_color_map)), pch="+",col=2:(dim(coef_tmp)[3]+1),cex=5,xlim=map_xlim,ylim=5*line_ylim_new,las=1,cex.axis=1,cex.lab=1, xaxs="i", yaxs="i",ylab="Coeffs./arb. unit",xlab=str_xlab)
+          if (plot_sum_line) {
+            lines(rulxlab,5*sum_line,type="l",ylim=line_ylim_new,col=1,xaxs="i")
+          }
         } else {
-          plot(rulxlab,sum_line,type="l",ylim=line_ylim,col=1,ylab="Coefficients/arb. unit",xlab=str_xlab,xaxs="i")
+          plot(rulxlab,5*sum_line,type="l",ylim=5*line_ylim,col=plot_sum_line*1,ylab="Coefficients/arb. unit",xlab=str_xlab,xaxs="i")
         }
-        for (i in seq_len(vca_p)) {
-          lines(rulxlab,coef[,1,i],col=i+1)
+        for (i in seq_along(em_index_for_color_map)) {
+          lines(rulxlab, 5*coef_tmp[,1,em_index_for_color_map[i]+1],col=i+1)
         }
       } else { # make map
         indice_2d<-sapply(indice,function(x){ThreeDimData$new(coef[,,1])$convert_index_to_n(x)})
@@ -1855,16 +2015,22 @@ EELSUnmix<-R6Class( "EELS_unmix",
         indice_position_y<-(rulylab[indice_2d[2,]])
         plot(NA,col=2:(vca_p+1),cex=5,xlim=map_xlim,ylim=map_ylim,las=1,cex.axis=1,cex.lab=1, xaxs="i", yaxs="i",xlab=str_xlab,ylab=str_ylab,asp=1)
 
-	if (is.na(em_index_for_color_map)) {
-	  em_index_for_color_map<-1:3
+	if ( (1 == length(em_index_for_color_map)) && is.na(em_index_for_color_map)) {
+	  em_index_for_color_map<-1:min(3,vca_p)
+	} 
+	if (length(em_index_for_color_map) < 3 ) {
+	  em_index_for_color_map<-c(em_index_for_color_map,rep(0,3-length(em_index_for_color_map)))
+	} else if (length(em_index_for_color_map) > 3 ) {
+	  em_index_for_color_map<-em_index_for_color_map[1:3]
 	}
 	#_begin_vca_fit_map
-	if (vca_p==1){
-	  rgb_map<-array(c(coef, rep(0, 2*prod(dim(coef)[1:2])) ),dim=dim(coef)+c(0,0,2))
-	} else if (vca_p==2){
-	  rgb_map<-array(c(coef, rep(0, prod(dim(coef)[1:2])) ),dim=dim(coef)+c(0,0,1))
-	} else {
-	  rgb_map<-coef[,,em_index_for_color_map]
+        coef_tmp<-array(0,dim=dim(coef)+c(0,0,1))
+        coef_tmp[,,2:(1+dim(coef)[3])]  <- coef
+	rgb_map<-coef_tmp[,,em_index_for_color_map+1,drop=F]
+	if (minzero) {
+		rgb_map[,,1]<-rgb_map[,,1]-min(rgb_map[,,1])
+		rgb_map[,,2]<-rgb_map[,,2]-min(rgb_map[,,2])
+		rgb_map[,,3]<-rgb_map[,,3]-min(rgb_map[,,3])
 	}
 	scale_to_saturate<-array(t(matrix(c(
 			{function(x) {if (x==0) {return(0)} else {return(1/x)}}  }(quantile(rgb_map[,,1],.99)),
@@ -1872,11 +2038,11 @@ EELSUnmix<-R6Class( "EELS_unmix",
 			{function(x) {if (x==0) {return(0)} else {return(1/x)}}  }(quantile(rgb_map[,,3],.99)) ),
 		ncol=length(rgb_map[,,1]),nrow=3)),dim=c(dim(rgb_map)[c(1,2)],3))
 	to_display_scaled<-rgb_map*scale_to_saturate
-	to_display<-to_display_scaled*as.double(to_display_scaled>0)*as.double(to_display_scaled<1)+as.double(to_display_scaled>1)
+	to_display<-to_display_scaled*as.double(to_display_scaled>0)*as.double(to_display_scaled<1)+as.double(to_display_scaled>=1)
 	to_display<-aperm(array(to_display,dim=c(dim(rgb_map)[c(1,2)],3)),c(2,1,3))
 
 	rasterArray<-array(to_display*1.,dim=c(dim(rgb_map)[c(2,1)],3))
-print(dim(to_display));print(dim(rasterArray))
+# print(dim(to_display));print(dim(rasterArray))
 	rasterMap<-as.raster(rasterArray[rev(seq_len(dim(rasterArray)[1])),,,drop=F])
 	rasterImage(rasterMap,min(rulxlab)+(rulxlab[1]-rulxlab[2])/2.,min(rulylab)+(rulylab[1]-rulylab[2])/2.,max(rulxlab)+(rulxlab[2]-rulxlab[1])/2., max(rulylab)+(rulylab[2]-rulylab[1])/2., interpolate = FALSE)
 		if (plot_em_position) {
@@ -1911,8 +2077,8 @@ print(dim(to_display));print(dim(rasterArray))
       if (dim(residuals)[2] == 1) {
         image(rulxlab, seq(0,5,length.out=dim(residuals)[3]), residuals[,1,]/(vca_noise) ,zlim=c(qnorm(1/prod(dim(chisq_2d))), qnorm(1-1/prod(dim(chisq_2d)))),col=terrain.colors(2^16),xlab=str_xlab,ylab=expression(paste("reduced ",chi^2)),xlim=map_xlim,las=1)
         lines(rulxlab,chisq_line_ave)
-        lines(range(rulxlab)+.5*rulxlab[2]*c(-1,1), rep(chisq_lb,2),col="red")
-        lines(range(rulxlab)+.5*rulxlab[2]*c(-1,1), rep(chisq_ub,2),col="red")
+        lines(range(rulxlab)+.0*rulxlab[2]*c(-1,1), rep(chisq_lb,2),col="red")
+        lines(range(rulxlab)+.0*rulxlab[2]*c(-1,1), rep(chisq_ub,2),col="red")
       } else {
         image(rulxlab, rulylab, log(chisq_line_ave_3d) , 
           zlim=log(c(chisq_lb,chisq_ub)),col=terrain.colors(2^16),
@@ -2002,6 +2168,7 @@ UnmixCore = R6Class( "UnmixCore",
           }
           vca_pca<-svd(vca_R, nu=vca_p)
         } # EOF !is.na()
+        vca_pca_u<-vca_pca$u
         # proj into p dims
         vca_xp<-t(vca_pca$u)%*%vca_R
         # again in L dims
@@ -2030,6 +2197,7 @@ UnmixCore = R6Class( "UnmixCore",
           }
           vca_pca<-svd(vca_Ro%*%t(vca_Ro)/vca_N, nu=vca_p, nv=vca_p)
         }
+        vca_pca_u<-vca_pca$u
         #proj into p dims
         vca_xp<-t(vca_pca$u)%*%vca_Ro
         #again in L dims
@@ -2041,10 +2209,23 @@ UnmixCore = R6Class( "UnmixCore",
         vca_xp_shifted<-vca_xp-matrix(c(vca_u), nrow=vca_p, ncol=vca_N)
         vca_xp_norm<-sqrt( colSums(vca_xp_shifted*vca_xp_shifted) )
         vca_xp_shifted_normalized<-vca_xp_shifted/t(matrix(vca_xp_norm, nrow=vca_N, ncol=vca_p))
+      } else if (dr_method == "manifold_general") {
+        if (getOption('unmixeels.verbose') == T) {
+          print(sprintf("Info: using %s for dimensionality reduction.", dr_method))
+        }
+        dr_res<-pca_method(vca_R, vca_p)
+        vca_Rp<-dr_res$Rp
+        vca_xp<-dr_res$Xp
+        vca_pca_u<-dr_res$u
+        vca_xp_shifted<-dr_res$Xp_shifted
+        vca_xp_norm<-sqrt( colSums(vca_xp_shifted*vca_xp_shifted) )
+        vca_xp_shifted_normalized<-vca_xp_shifted/t(matrix(vca_xp_norm, nrow=vca_N, ncol=vca_p))
+        #vca_xp_shifted_normalized[is.nan(vca_xp_shifted_normalized)]<-0
+        vca_noise<-vca_noise_mag*sort(dist(t(vca_xp)))[vca_N]
       } else {
-        message(sprintf("Error: dr_method `%d` not implemented!", dr_method))
+        message(sprintf("Error: dr_method `%s` not implemented!", dr_method))
       }#endif dr_method
-      private$.u<-vca_pca$u
+      private$.u<-vca_pca_u
       private$.Rp<-vca_Rp
       private$.Xp<-vca_xp
       private$.Xp_shifted<-vca_xp_shifted
@@ -2091,7 +2272,8 @@ UnmixCore = R6Class( "UnmixCore",
         #   fa<-abs(prod(svdres$d[-length(svdres$d)]))
       } else {
 #        fa<-V
-         fa<-0
+        fa<-0
+#        fa<-abs(V)
       }
       fa
     },
@@ -2158,7 +2340,7 @@ UnmixCore = R6Class( "UnmixCore",
       center_of_mass_all<-rowMeans(vca_xp_shifted_normalized)
       for (i in seq_len(vca_N)) {
         dist_i<- sqrt(colSums((vca_xp_shifted_normalized-vca_xp_shifted_normalized[ ,i])^2))
-        pps<-which(dist_i<cut_off_radius[i])
+        pps<-which(dist_i<=cut_off_radius[i])
         pps_lens[i]<-length(pps)
         # row: vca_p dims (repeated) ; col: pps pts
         weight_from_sigma<-t(matrix(vca_xp_norm[pps,drop=F]^2,ncol=vca_p,nrow=length(pps)))
@@ -2186,6 +2368,9 @@ UnmixCore = R6Class( "UnmixCore",
 
       vca_xp_new_norm<-sqrt( colSums(vca_xp_new*vca_xp_new) )
       vca_xp_new_normalized<-vca_xp_new/t(matrix(vca_xp_new_norm, nrow=vca_N, ncol=vca_p))
+
+      private$.Xp_new <- vca_xp_new
+      private$.Xp_new_norm<- vca_xp_new_norm
 
       private$.Xp_shifted_normalized_old<-private$.Xp_shifted_normalized
       private$.Xp_shifted_normalized<-vca_xp_new_normalized
@@ -2266,7 +2451,7 @@ my_perm<-function(m,n){
 #       if (getOption('unmixeels.verbose') == T) {
 #         print(sprintf("Info: using %s-nfindr"))
 #       }
-#      if (vca_p>1) { 
+      if (vca_p>1) { 
 
         vca_N <- dim(data)[2]
 #        nfindr_indice_old<-sample(1:dim(data)[2],vca_p)
@@ -2330,7 +2515,9 @@ my_perm<-function(m,n){
 
 
         } # EOF nfindr_pass
-#      }
+      } else { # vca_p>1
+        nfindr_indice_best<-which.max(abs(private$.Xp_shifted))
+      }
        if (getOption('unmixeels.verbose') == T) {
          print("Info: best_indice by nfindr:");print(sort(nfindr_indice_best))
        }
@@ -2386,24 +2573,38 @@ my_perm<-function(m,n){
       private$.R<-vca_R
       invisible(self)
     },
+    get_R_and_scale = function() {
+      out<-NULL
+      out$intensity_scale<-private$.intensity_scale
+      out$R<-private$.R
+      out
+    },
     set_Rp_em_from_Xp = function() {
+      vca_R <- private$.R
       vca_N <- private$.N
       vca_p <- private$.p
       vca_noise<-private$.noise
       vca_indice<-private$.indice
       manifold_dim<-private$.manifold_dim
       vca_xp<-private$.Xp
+      vca_xp_new<-private$.Xp_new
       vca_xp_shifted_normalized <- private$.Xp_shifted_normalized
       vca_xp_norm <- private$.Xp_norm
       dr_method<-private$.dr_method
       vca_Rm<-private$.Rm
       vca_u<-private$.u
-      vca_xp_em<-vca_xp[,vca_indice,drop=F]
+      vca_xp_em<-vca_xp_new[,vca_indice,drop=F]
       if (dr_method == "svd") {
         vca_Rp_em<-vca_u%*%vca_xp_em
       } else if (dr_method == "pca") {
         vca_Rp_em<-vca_u%*%vca_xp_em+vca_Rm
+      } #else if (dr_method == "tsne" || dr_method == "tsne0") {
+        #vca_Rp_em<-vca_R[,vca_indice,drop=F]
+        # } 
+      else {
+        vca_Rp_em<-vca_R[,vca_indice,drop=F]
       }
+      private$.Xp_em<-vca_xp_em
       private$.Rp_em<-vca_Rp_em
       invisible(self)
     },
@@ -2411,16 +2612,24 @@ my_perm<-function(m,n){
       private$.Ae<-Ae
       invisible(self)
     },
+    get_Ae = function() {
+      private$.Ae
+    },
     set_Ae_from_Rp_em_and_scale = function() {
       vca_L<-private$.L
       Rp_em<-private$.Rp_em
       vca_p<-private$.p
 
+      vca_xp_new<-private$.Xp_new
+
+
       intensity_scale<-private$.intensity_scale
       indice<-private$.indice
       intensity_scale_em<-t(matrix(intensity_scale[indice],nrow=vca_p , ncol=vca_L))
       Ae<-Rp_em / intensity_scale_em
+      Ae_xp<-vca_xp_new[,indice,drop=F]/t(matrix(intensity_scale[indice],nrow=vca_p , ncol=dim(vca_xp_new)[1]))
       self$set_Ae(Ae)
+      private$.Ae_xp<-Ae_xp
       invisible(self)
     },
     # use R and Ae
@@ -2438,6 +2647,22 @@ my_perm<-function(m,n){
       private$.residuals<-residuals
       private$.fm0<-fm0
       invisible(self)
+    },
+    manifold_coefs = function(){
+      vca_xp_new<-private$.Xp_new
+      xp_shifted<-private$.Xp_shifted
+      Ae_xp<-private$.Ae_xp
+
+      fm0<-lm(xp_shifted ~ Ae_xp + 0)
+      fitted   <- fm0$fitted.values
+      # coef has p rows and N cols. 
+      coef     <- fm0$coefficients
+      residuals<- fm0$residuals
+      private$.fitted<-fitted
+      private$.coef  <-coef
+      private$.residuals<-residuals
+      private$.fm0<-fm0
+      invisible(self)      
     },
     set_residuals_chisq = function() {
       residuals <- private$.residuals
@@ -2500,8 +2725,19 @@ my_perm<-function(m,n){
       self$set_residuals_chisq()
       invisible(self)
     },
+#    set_p = function(p) {
+#      private$.p<-p
+#      if (getOption('unmixeels.verbose') == T) {
+#        message(sprintf("Info: Using p = %d", private$.p))
+#      }
+#      self$do_dim_reduction_and_em_extraction_from_p()
+#    },
     find_p = function(max_p) {
       private$.p <- 1
+#      if (max_p<0) {
+#        max_p<--max_p
+#        private$.p<-max_p
+#      }
       max_p<-max_p+1
       while (private$.p < max_p) {
         if (getOption('unmixeels.verbose') == T) {
@@ -2632,6 +2868,7 @@ my_perm<-function(m,n){
     .u = NA,
     .Rp = NA,
     .Ae = NA,
+    .Ae_xp = NA, 
     .intensity_scale = NA,
     .Rp_em = NA,
     .Xp = NA,
@@ -2639,6 +2876,9 @@ my_perm<-function(m,n){
     .Xp_shifted_normalized = NA,
     .Xp_shifted_normalized_old = NA,
     .Xp_norm = NA,
+    .Xp_new = NA,
+    .Xp_new_norm = NA,
+    .Xp_em = NA, 
     .cut_off_radius = NA,
     .noise = NA,
     .indice = NA, 

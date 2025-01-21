@@ -8,7 +8,7 @@ unmixeels
    2) the signature of each spectral component. 
    3) the abundance of each spectral component in each pixel. 
 
-* This framework includes an "unsupervised" unmixing process. Reference spectra from other sources are not needed. 
+* This framework includes an "unsupervised" unmixing process. SVD/PCA or manifold learning methods are used for dimensionality reduction. N-FINDR is used for endmember extraction. No additional reference spectra from prior knowledge are not needed. 
 
 See `simulated_data.R` for more information. 
 
@@ -51,9 +51,11 @@ See `simulated_data.R` for more information.
    make 
    cd ..
    ```
-4. Compile subroutine `my_gaussian_1.c` :
+4. Compile C or CUDA offload subroutines. (If CUDA is not available, set `use_cuda = F` at the beginning of unmixeels.R) :
 ```
-   gcc -Wall -O2 -fPIC -o my_gaussian_1.so my_gaussian_1.c -shared -lm -lR
+   cd offload
+   gcc -Wall -O2 -fPIC -o unmixeels_c_offload.so unmixeels_c_offload.c -shared -lm -lR
+   nvcc --compiler-options '-fPIC -lcudart -shared -lm -lR ' unmixeels_cuda_offload.cu -lcudart -o unmixeels_cuda_offload.so
 ```
 
 ### Usage

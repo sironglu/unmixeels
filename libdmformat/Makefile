@@ -1,20 +1,22 @@
 CC = gcc
-
 CFLAGS = -O2 -Wall -fPIC
-
 LINK = -shared -fPIC
+LIB = -L. -ldmformat -lR 
+INC = -I/usr/share/R/include/
 
-LIB = -L. -ldmformat 
-
-objects-lib = libdm3format.o libdm4format.o libdmfilemap.o get_objs3.o get_objs4.o 
+objects-lib = libdm3format.o libdm4format.o libdmfilemap.o get_objs3.o get_objs4.o R_4gb_wrapper4.o 
 
 objects = $(objects-lib) dmshowinfo.o 
 
-dmshowinfo: dmshowinfo.o libdmformat.so 
+dmshowinfo: dmshowinfo.o libdmformat.a 
 	$(CC) -o dmshowinfo dmshowinfo.o  $(LIB)
 
 libdmformat.so : $(objects)
 	$(CC) $(LINK)  -o libdmformat.so $(objects-lib)
+
+libdmformat.a : $(objects)
+	ar rcs $@ $^
+	ranlib $@
 
 dmshowinfo.o : libdmfilemap.h libdmformat.h dmshowinfo.c libdm3format.h libdm4format.h
 	$(CC) $(CFLAGS) -o dmshowinfo.o -c dmshowinfo.c
@@ -43,6 +45,10 @@ get_objs3.o : get_objs.c libdm3format.h
 get_objs4.o : get_objs.c libdm4format.h
 	sed 's/DM_/DM4_/g' get_objs.c >get_objs4.c
 	$(CC) $(CFLAGS)  -DDMVERSION=4 -o get_objs4.o -c get_objs4.c 
+
+R_4gb_wrapper4.o : R_4gb_wrapper.c 
+	sed 's/DM_/DM4_/g' R_4gb_wrapper.c >R_4gb_wrapper4.c 
+	$(CC) $(CFLAGS) $(INC) -DDMVERSION=4 -o R_4gb_wrapper4.o -c R_4gb_wrapper4.c 
 
 .PHONY : clean
 clean :
